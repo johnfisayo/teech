@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { supabase } from '@/lib/supabase'
+import { getSupabase } from '@/lib/supabase'
 
 export default function AuthPage() {
   const [isLogin, setIsLogin] = useState(true)
@@ -41,6 +41,7 @@ export default function AuthPage() {
   }
 
   const handleGoogleSignIn = async () => {
+    const supabase = getSupabase()
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {

@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import { User, Session } from '@supabase/supabase-js'
-import { supabase } from './supabase'
+import { getSupabase } from './supabase'
 
 interface AuthContextType {
   user: User | null
@@ -21,12 +21,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    // Only run on client side
-    if (typeof window === 'undefined') {
-      setLoading(false)
-      return
-    }
-
+    const supabase = getSupabase()
+    
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
       setUser(session?.user ?? null)
@@ -45,6 +41,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const signUp = async (email: string, password: string, fullName: string) => {
+    const supabase = getSupabase()
     const { error } = await supabase.auth.signUp({
       email,
       password,
@@ -56,6 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const signIn = async (email: string, password: string) => {
+    const supabase = getSupabase()
     const { error } = await supabase.auth.signInWithPassword({
       email,
       password
@@ -64,6 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const signOut = async () => {
+    const supabase = getSupabase()
     await supabase.auth.signOut()
   }
 
