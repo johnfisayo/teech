@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { supabase, getSupabase } from '@/lib/supabase'
+import { supabase } from '@/lib/supabase'
 
 interface Course {
   id: string
@@ -138,7 +138,7 @@ export default function Dashboard() {
   }, [user])
 
   const fetchCourses = async () => {
-    const supabase = getSupabase()
+    
     setLoading(true)
     const { data, error } = await supabase
       .from('courses')
@@ -160,8 +160,6 @@ export default function Dashboard() {
 
   const addCourse = async () => {
     if (!newCourseName || !newCourseCode) return
-    
-    const supabase = getSupabase()
     const { error } = await supabase
       .from('courses')
       .insert({ user_id: user?.id, name: newCourseName, code: newCourseCode })
@@ -177,7 +175,6 @@ export default function Dashboard() {
   const addTopic = async () => {
     if (!newTopicName || !selectedCourse) return
     
-    const supabase = getSupabase()
     const { error } = await supabase
       .from('topics')
       .insert({ course_id: selectedCourse.id, name: newTopicName })
@@ -192,7 +189,6 @@ export default function Dashboard() {
   const addNote = async () => {
     if (!newNoteTitle || !selectedTopicForNote) return
     
-    const supabase = getSupabase()
     const { error } = await supabase
       .from('notes')
       .insert({ topic_id: selectedTopicForNote, title: newNoteTitle, content: newNoteContent })
