@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { getSupabase } from '@/lib/supabase'
+import { supabase, getSupabase } from '@/lib/supabase'
 
 interface Course {
   id: string
