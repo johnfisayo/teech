@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { supabase } from '@/lib/supabase'
@@ -32,6 +32,7 @@ interface Message {
   id: string
   role: 'user' | 'assistant'
   content: string
+  image_url?: string
   bookmarked: boolean
 }
 
@@ -57,6 +58,8 @@ function Modal({ isOpen, onClose, title, children }: { isOpen: boolean, onClose:
         padding: '24px',
         width: '100%',
         maxWidth: '420px',
+        maxHeight: '90vh',
+        overflowY: 'auto',
       }}>
         <div style={{
           display: 'flex',
@@ -89,6 +92,8 @@ function Modal({ isOpen, onClose, title, children }: { isOpen: boolean, onClose:
 export default function Dashboard() {
   const { user, loading: authLoading, signOut } = useAuth()
   const router = useRouter()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
   
   // State
   const [activeTab, setActiveTab] = useState('courses')
@@ -97,6 +102,7 @@ export default function Dashboard() {
   const [selectedNote, setSelectedNote] = useState<Note | null>(null)
   const [expandedTopics, setExpandedTopics] = useState<Record<string, boolean>>({})
   const [loading, setLoading] = useState(true)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   
   // Modal state
   const [showAddCourse, setShowAddCourse] = useState(false)
@@ -114,14 +120,26 @@ export default function Dashboard() {
   // Chat state
   const [mode, setMode] = useState<'bounded' | 'expanded'>('bounded')
   const [chatInput, setChatInput] = useState('')
+  const [selectedImage, setSelectedImage] = useState<File | null>(null)
+  const [imagePreview, setImagePreview] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'welcome',
       role: 'assistant',
-      content: "Hey! I'm Teech 👋 Upload a problem or ask me to explain something from your notes. I'll help you understand it better!",
+      content: "Hey! I'm Teech 👋 Upload a photo of your assignment or ask me to explain something from your notes. I'll help you understand it better!",
       bookmarked: false,
     }
   ])
+
+  // Scroll to bottom of messages
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }
+
+  useEffect(() => {
+    scrollToBottom()
+  }, [messages])
 
   // Redirect if not logged in
   useEffect(() => {
@@ -138,7 +156,6 @@ export default function Dashboard() {
   }, [user])
 
   const fetchCourses = async () => {
-    
     setLoading(true)
     const { data, error } = await supabase
       .from('courses')
@@ -160,6 +177,7 @@ export default function Dashboard() {
 
   const addCourse = async () => {
     if (!newCourseName || !newCourseCode) return
+    
     const { error } = await supabase
       .from('courses')
       .insert({ user_id: user?.id, name: newCourseName, code: newCourseCode })
@@ -206,19 +224,75 @@ export default function Dashboard() {
     setExpandedTopics(prev => ({ ...prev, [topicId]: !prev[topicId] }))
   }
 
+  // Handle image selection
+  const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      setSelectedImage(file)
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        setImagePreview(reader.result as string)
+      }
+      reader.readAsDataURL(file)
+    }
+  }
+
+  // Remove selected image
+  const removeSelectedImage = () => {
+    setSelectedImage(null)
+    setImagePreview(null)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  // Upload image to Supabase Storage
+  const uploadImage = async (file: File): Promise<string | null> => {
+    const fileExt = file.name.split('.').pop()
+    const fileName = `${user?.id}/${Date.now()}.${fileExt}`
+    
+    const { error } = await supabase.storage
+      .from('uploads')
+      .upload(fileName, file)
+
+    if (error) {
+      console.error('Upload error:', error)
+      return null
+    }
+
+    const { data: { publicUrl } } = supabase.storage
+      .from('uploads')
+      .getPublicUrl(fileName)
+
+    return publicUrl
+  }
+
   const handleSendMessage = async () => {
-    if (!chatInput.trim()) return
+    if (!chatInput.trim() && !selectedImage) return
+
+    setUploading(true)
+    let imageUrl: string | undefined
+
+    // Upload image if selected
+    if (selectedImage) {
+      const uploadedUrl = await uploadImage(selectedImage)
+      if (uploadedUrl) {
+        imageUrl = uploadedUrl
+      }
+    }
 
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: chatInput,
+      content: chatInput || 'Please help me with this image',
+      image_url: imageUrl,
       bookmarked: false,
     }
 
     setMessages(prev => [...prev, userMessage])
     const currentInput = chatInput
     setChatInput('')
+    removeSelectedImage()
 
     // Add loading message
     const loadingId = (Date.now() + 1).toString()
@@ -228,6 +302,8 @@ export default function Dashboard() {
       content: 'Thinking...',
       bookmarked: false,
     }])
+
+    setUploading(false)
 
     try {
       // Gather notes from selected course
@@ -244,10 +320,11 @@ export default function Dashboard() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: currentInput,
+          message: currentInput || 'Please analyze this image and help me understand it',
           mode: mode,
           notes: notesContent,
           courseName: selectedCourse?.name || 'General',
+          imageUrl: imageUrl,
         }),
       })
 
@@ -353,7 +430,7 @@ export default function Dashboard() {
         zIndex: 50,
         backdropFilter: 'blur(10px)',
         borderBottom: '1px solid rgba(16, 185, 129, 0.1)',
-        padding: '16px 24px',
+        padding: '12px 16px',
       }}>
         <div style={{
           maxWidth: '1200px',
@@ -362,20 +439,20 @@ export default function Dashboard() {
           justifyContent: 'space-between',
           alignItems: 'center',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <div style={{
-              width: '40px',
-              height: '40px',
+              width: '36px',
+              height: '36px',
               background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
               borderRadius: '10px',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
             }}>
-              <span style={{ fontSize: '20px' }}>📚</span>
+              <span style={{ fontSize: '18px' }}>📚</span>
             </div>
             <h1 style={{
-              fontSize: '24px',
+              fontSize: '22px',
               fontWeight: 700,
               background: 'linear-gradient(135deg, #10b981 0%, #a7f3d0 100%)',
               WebkitBackgroundClip: 'text',
@@ -384,28 +461,35 @@ export default function Dashboard() {
             }}>Teech</h1>
           </div>
 
-          {/* Navigation */}
-          <nav style={{ display: 'flex', gap: '8px' }}>
+          {/* Desktop Navigation */}
+          <nav style={{ 
+            display: 'flex', 
+            gap: '6px',
+          }}>
             {[
-              { id: 'courses', label: '📖 Courses' },
-              { id: 'solve', label: '💬 Solve' },
-              { id: 'saved', label: '🔖 Saved' },
+              { id: 'courses', label: '📖', fullLabel: 'Courses' },
+              { id: 'solve', label: '💬', fullLabel: 'Solve' },
+              { id: 'saved', label: '🔖', fullLabel: 'Saved' },
             ].map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 style={{
-                  padding: '10px 20px',
-                  borderRadius: '12px',
+                  padding: '8px 12px',
+                  borderRadius: '10px',
                   border: activeTab === tab.id ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid transparent',
                   background: activeTab === tab.id ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
                   color: activeTab === tab.id ? '#a7f3d0' : 'rgba(167, 243, 208, 0.5)',
                   cursor: 'pointer',
                   fontSize: '14px',
                   fontWeight: 500,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
                 }}
               >
-                {tab.label}
+                <span>{tab.label}</span>
+                <span className="desktop-only" style={{ display: 'none' }}>{tab.fullLabel}</span>
               </button>
             ))}
           </nav>
@@ -413,13 +497,13 @@ export default function Dashboard() {
           <button
             onClick={() => signOut()}
             style={{
-              padding: '10px 20px',
+              padding: '8px 14px',
               background: 'rgba(16, 185, 129, 0.1)',
               border: '1px solid rgba(16, 185, 129, 0.2)',
               borderRadius: '10px',
               color: '#a7f3d0',
               cursor: 'pointer',
-              fontSize: '14px',
+              fontSize: '13px',
             }}
           >
             Sign Out
@@ -428,20 +512,25 @@ export default function Dashboard() {
       </header>
 
       {/* Main Content */}
-      <main style={{ padding: '32px 24px', maxWidth: '1200px', margin: '0 auto' }}>
+      <main style={{ 
+        padding: '20px 16px', 
+        maxWidth: '1200px', 
+        margin: '0 auto',
+        minHeight: 'calc(100vh - 70px)',
+      }}>
         
         {/* Courses Tab */}
         {activeTab === 'courses' && (
           <div>
             <div style={{
               display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: '32px',
+              flexDirection: 'column',
+              gap: '16px',
+              marginBottom: '24px',
             }}>
               <div>
-                <h2 style={{ fontSize: '32px', fontWeight: 600, margin: 0 }}>Your Courses</h2>
-                <p style={{ color: 'rgba(167, 243, 208, 0.6)', marginTop: '8px' }}>
+                <h2 style={{ fontSize: '26px', fontWeight: 600, margin: 0 }}>Your Courses</h2>
+                <p style={{ color: 'rgba(167, 243, 208, 0.6)', marginTop: '6px', fontSize: '14px' }}>
                   Click a course to expand topics and notes
                 </p>
               </div>
@@ -450,8 +539,9 @@ export default function Dashboard() {
                 style={{
                   display: 'flex',
                   alignItems: 'center',
+                  justifyContent: 'center',
                   gap: '8px',
-                  padding: '12px 24px',
+                  padding: '12px 20px',
                   background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
                   border: 'none',
                   borderRadius: '12px',
@@ -459,6 +549,8 @@ export default function Dashboard() {
                   cursor: 'pointer',
                   fontWeight: 600,
                   fontSize: '14px',
+                  width: '100%',
+                  maxWidth: '200px',
                 }}
               >
                 + Add Course
@@ -472,20 +564,20 @@ export default function Dashboard() {
             ) : courses.length === 0 ? (
               <div style={{
                 textAlign: 'center',
-                padding: '60px 20px',
+                padding: '40px 20px',
                 background: 'rgba(16, 185, 129, 0.05)',
                 border: '1px dashed rgba(16, 185, 129, 0.2)',
-                borderRadius: '20px',
+                borderRadius: '16px',
               }}>
-                <p style={{ color: 'rgba(167, 243, 208, 0.6)', fontSize: '18px' }}>
+                <p style={{ color: 'rgba(167, 243, 208, 0.6)', fontSize: '16px' }}>
                   No courses yet. Add your first course to get started!
                 </p>
               </div>
             ) : (
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))',
-                gap: '20px',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+                gap: '16px',
               }}>
                 {courses.map(course => (
                   <div
@@ -498,8 +590,8 @@ export default function Dashboard() {
                       border: selectedCourse?.id === course.id
                         ? '1px solid rgba(16, 185, 129, 0.4)'
                         : '1px solid rgba(16, 185, 129, 0.15)',
-                      borderRadius: '16px',
-                      padding: '20px',
+                      borderRadius: '14px',
+                      padding: '16px',
                       cursor: 'pointer',
                       position: 'relative',
                       overflow: 'hidden',
@@ -514,32 +606,32 @@ export default function Dashboard() {
                       background: course.color || '#10b981',
                     }} />
                     
-                    <div style={{ marginLeft: '12px' }}>
+                    <div style={{ marginLeft: '10px' }}>
                       <span style={{
-                        fontSize: '12px',
+                        fontSize: '11px',
                         color: 'rgba(167, 243, 208, 0.6)',
                         fontFamily: 'monospace',
                       }}>{course.code}</span>
                       <h3 style={{
-                        fontSize: '18px',
+                        fontSize: '16px',
                         fontWeight: 600,
                         marginTop: '4px',
-                        marginBottom: '12px',
+                        marginBottom: '10px',
                       }}>{course.name}</h3>
                       
                       <span style={{
                         background: 'rgba(16, 185, 129, 0.2)',
                         color: '#a7f3d0',
-                        padding: '4px 12px',
-                        borderRadius: '20px',
-                        fontSize: '12px',
+                        padding: '4px 10px',
+                        borderRadius: '16px',
+                        fontSize: '11px',
                       }}>
                         {course.topics?.reduce((acc, t) => acc + (t.notes?.length || 0), 0) || 0} notes
                       </span>
 
                       {/* Expanded Topics */}
                       {selectedCourse?.id === course.id && (
-                        <div style={{ marginTop: '16px' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ marginTop: '14px' }} onClick={e => e.stopPropagation()}>
                           {course.topics?.map(topic => (
                             <div key={topic.id} style={{ marginBottom: '8px' }}>
                               <div
@@ -554,11 +646,11 @@ export default function Dashboard() {
                                   cursor: 'pointer',
                                 }}
                               >
-                                <span style={{ fontSize: '14px' }}>
+                                <span style={{ fontSize: '13px' }}>
                                   {expandedTopics[topic.id] ? '▼' : '▶'} {topic.name}
                                 </span>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                  <span style={{ fontSize: '12px', color: 'rgba(167, 243, 208, 0.5)' }}>
+                                  <span style={{ fontSize: '11px', color: 'rgba(167, 243, 208, 0.5)' }}>
                                     {topic.notes?.length || 0}
                                   </span>
                                   <button
@@ -574,7 +666,7 @@ export default function Dashboard() {
                                       padding: '4px 8px',
                                       color: '#a7f3d0',
                                       cursor: 'pointer',
-                                      fontSize: '12px',
+                                      fontSize: '11px',
                                     }}
                                   >
                                     +
@@ -589,9 +681,9 @@ export default function Dashboard() {
                                   style={{
                                     display: 'flex',
                                     alignItems: 'center',
-                                    gap: '10px',
+                                    gap: '8px',
                                     padding: '10px 12px',
-                                    marginLeft: '20px',
+                                    marginLeft: '16px',
                                     marginTop: '4px',
                                     background: 'rgba(16, 185, 129, 0.05)',
                                     border: '1px solid rgba(16, 185, 129, 0.1)',
@@ -599,8 +691,8 @@ export default function Dashboard() {
                                     cursor: 'pointer',
                                   }}
                                 >
-                                  <span style={{ fontSize: '14px' }}>📄</span>
-                                  <span style={{ fontSize: '14px', flex: 1 }}>{note.title}</span>
+                                  <span style={{ fontSize: '12px' }}>📄</span>
+                                  <span style={{ fontSize: '13px', flex: 1 }}>{note.title}</span>
                                 </div>
                               ))}
                             </div>
@@ -619,7 +711,7 @@ export default function Dashboard() {
                               borderRadius: '8px',
                               color: '#10b981',
                               cursor: 'pointer',
-                              fontSize: '14px',
+                              fontSize: '13px',
                               marginTop: '8px',
                             }}
                           >
@@ -637,25 +729,36 @@ export default function Dashboard() {
 
         {/* Solve Tab */}
         {activeTab === 'solve' && (
-          <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 200px)' }}>
+          <div style={{ 
+            display: 'flex', 
+            flexDirection: 'column', 
+            height: 'calc(100vh - 140px)',
+          }}>
             {/* Mode Toggle */}
-            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '20px' }}>
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'center', 
+              marginBottom: '12px',
+            }}>
               <div style={{
                 display: 'flex',
                 background: 'rgba(16, 185, 129, 0.1)',
-                borderRadius: '14px',
+                borderRadius: '12px',
                 padding: '4px',
                 border: '1px solid rgba(16, 185, 129, 0.2)',
+                width: '100%',
+                maxWidth: '320px',
               }}>
                 {[
-                  { id: 'bounded', label: '📚 Bounded', desc: 'Your notes only' },
-                  { id: 'expanded', label: '🌐 Expanded', desc: 'Notes + External' },
+                  { id: 'bounded', label: '📚 Bounded', desc: 'Notes only' },
+                  { id: 'expanded', label: '🌐 Expanded', desc: 'Notes + AI' },
                 ].map(m => (
                   <button
                     key={m.id}
                     onClick={() => setMode(m.id as 'bounded' | 'expanded')}
                     style={{
-                      padding: '12px 24px',
+                      flex: 1,
+                      padding: '10px 12px',
                       borderRadius: '10px',
                       border: 'none',
                       background: mode === m.id
@@ -666,15 +769,19 @@ export default function Dashboard() {
                       textAlign: 'center',
                     }}
                   >
-                    <div style={{ fontWeight: 600, fontSize: '14px' }}>{m.label}</div>
-                    <div style={{ fontSize: '11px', opacity: 0.8 }}>{m.desc}</div>
+                    <div style={{ fontWeight: 600, fontSize: '13px' }}>{m.label}</div>
+                    <div style={{ fontSize: '10px', opacity: 0.8 }}>{m.desc}</div>
                   </button>
                 ))}
               </div>
             </div>
 
             {/* Course Selector */}
-            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '20px' }}>
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'center', 
+              marginBottom: '12px',
+            }}>
               <select
                 value={selectedCourse?.id || ''}
                 onChange={(e) => {
@@ -682,17 +789,19 @@ export default function Dashboard() {
                   setSelectedCourse(course || null)
                 }}
                 style={{
-                  padding: '10px 20px',
+                  padding: '10px 16px',
                   background: 'rgba(16, 185, 129, 0.1)',
                   border: '1px solid rgba(16, 185, 129, 0.2)',
                   borderRadius: '10px',
                   color: '#a7f3d0',
-                  fontSize: '14px',
+                  fontSize: '13px',
                   cursor: 'pointer',
                   outline: 'none',
+                  width: '100%',
+                  maxWidth: '320px',
                 }}
               >
-                <option value="">Auto-detect course</option>
+                <option value="">Select a course</option>
                 {courses.map(c => (
                   <option key={c.id} value={c.id}>{c.code} - {c.name}</option>
                 ))}
@@ -700,35 +809,56 @@ export default function Dashboard() {
             </div>
 
             {/* Messages */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '20px 0' }}>
+            <div style={{ 
+              flex: 1, 
+              overflowY: 'auto', 
+              padding: '10px 0',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+            }}>
               {messages.map(msg => (
                 <div
                   key={msg.id}
                   style={{
                     display: 'flex',
                     justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start',
-                    marginBottom: '16px',
                   }}
                 >
                   <div style={{
-                    maxWidth: '80%',
-                    padding: '16px 20px',
-                    borderRadius: msg.role === 'user' ? '20px 20px 4px 20px' : '20px 20px 20px 4px',
+                    maxWidth: '85%',
+                    padding: '12px 16px',
+                    borderRadius: msg.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
                     background: msg.role === 'user'
                       ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
                       : 'rgba(16, 185, 129, 0.1)',
                     border: msg.role === 'user' ? 'none' : '1px solid rgba(16, 185, 129, 0.2)',
                     position: 'relative',
                   }}>
+                    {/* Image preview in message */}
+                    {msg.image_url && (
+                      <div style={{ marginBottom: '10px' }}>
+                        <img 
+                          src={msg.image_url} 
+                          alt="Uploaded" 
+                          style={{
+                            maxWidth: '100%',
+                            maxHeight: '200px',
+                            borderRadius: '8px',
+                            objectFit: 'contain',
+                          }}
+                        />
+                      </div>
+                    )}
                     <p style={{
                       margin: 0,
-                      fontSize: '15px',
+                      fontSize: '14px',
                       lineHeight: 1.6,
                       color: msg.role === 'user' ? '#022c22' : '#f0fdf4',
                       whiteSpace: 'pre-wrap',
                     }}>{msg.content}</p>
                     
-                    {msg.role === 'assistant' && (
+                    {msg.role === 'assistant' && msg.id !== 'welcome' && (
                       <button
                         onClick={() => toggleBookmark(msg.id)}
                         style={{
@@ -739,7 +869,8 @@ export default function Dashboard() {
                           border: 'none',
                           cursor: 'pointer',
                           color: msg.bookmarked ? '#10b981' : 'rgba(167, 243, 208, 0.4)',
-                          fontSize: '16px',
+                          fontSize: '14px',
+                          padding: '4px',
                         }}
                       >
                         {msg.bookmarked ? '🔖' : '○'}
@@ -748,72 +879,125 @@ export default function Dashboard() {
                   </div>
                 </div>
               ))}
+              <div ref={messagesEndRef} />
             </div>
+
+            {/* Image Preview */}
+            {imagePreview && (
+              <div style={{
+                padding: '10px',
+                background: 'rgba(16, 185, 129, 0.1)',
+                borderRadius: '12px',
+                marginBottom: '10px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+              }}>
+                <img 
+                  src={imagePreview} 
+                  alt="Preview" 
+                  style={{
+                    width: '60px',
+                    height: '60px',
+                    objectFit: 'cover',
+                    borderRadius: '8px',
+                  }}
+                />
+                <span style={{ flex: 1, fontSize: '13px', color: '#a7f3d0' }}>
+                  Image ready to send
+                </span>
+                <button
+                  onClick={removeSelectedImage}
+                  style={{
+                    background: 'rgba(239, 68, 68, 0.2)',
+                    border: 'none',
+                    borderRadius: '8px',
+                    padding: '8px 12px',
+                    color: '#fca5a5',
+                    cursor: 'pointer',
+                    fontSize: '12px',
+                  }}
+                >
+                  Remove
+                </button>
+              </div>
+            )}
 
             {/* Input */}
             <div style={{
               background: 'rgba(16, 185, 129, 0.05)',
               border: '1px solid rgba(16, 185, 129, 0.2)',
-              borderRadius: '20px',
-              padding: '16px',
+              borderRadius: '16px',
+              padding: '12px',
             }}>
-              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                <button style={{
-                  padding: '12px',
-                  background: 'rgba(16, 185, 129, 0.1)',
-                  border: '1px solid rgba(16, 185, 129, 0.2)',
-                  borderRadius: '12px',
-                  color: '#a7f3d0',
-                  cursor: 'pointer',
-                  fontSize: '16px',
-                }}>
+              <div style={{ 
+                display: 'flex', 
+                gap: '8px', 
+                alignItems: 'flex-end',
+              }}>
+                {/* Hidden file input */}
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleImageSelect}
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                />
+                
+                {/* Image upload button */}
+                <button 
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  style={{
+                    padding: '10px',
+                    background: imagePreview ? 'rgba(16, 185, 129, 0.3)' : 'rgba(16, 185, 129, 0.1)',
+                    border: '1px solid rgba(16, 185, 129, 0.2)',
+                    borderRadius: '10px',
+                    color: '#a7f3d0',
+                    cursor: 'pointer',
+                    fontSize: '16px',
+                    flexShrink: 0,
+                  }}
+                >
                   📷
                 </button>
-                <button style={{
-                  padding: '12px',
-                  background: 'rgba(16, 185, 129, 0.1)',
-                  border: '1px solid rgba(16, 185, 129, 0.2)',
-                  borderRadius: '12px',
-                  color: '#a7f3d0',
-                  cursor: 'pointer',
-                  fontSize: '16px',
-                }}>
-                  📎
-                </button>
+                
                 <input
                   type="text"
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-                  placeholder="Describe your problem or ask a question..."
+                  onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && handleSendMessage()}
+                  placeholder="Ask a question or describe your problem..."
                   style={{
                     flex: 1,
-                    padding: '14px 20px',
+                    padding: '12px 14px',
                     background: 'rgba(0, 0, 0, 0.2)',
                     border: '1px solid rgba(16, 185, 129, 0.15)',
-                    borderRadius: '12px',
+                    borderRadius: '10px',
                     color: '#f0fdf4',
-                    fontSize: '15px',
+                    fontSize: '14px',
                     outline: 'none',
+                    minWidth: 0,
                   }}
                 />
                 <button
                   onClick={handleSendMessage}
-                  disabled={!chatInput.trim()}
+                  disabled={(!chatInput.trim() && !selectedImage) || uploading}
                   style={{
-                    padding: '14px 24px',
-                    background: chatInput.trim()
+                    padding: '12px 16px',
+                    background: (chatInput.trim() || selectedImage) && !uploading
                       ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
                       : 'rgba(16, 185, 129, 0.2)',
                     border: 'none',
-                    borderRadius: '12px',
-                    color: chatInput.trim() ? '#022c22' : 'rgba(167, 243, 208, 0.4)',
-                    cursor: chatInput.trim() ? 'pointer' : 'not-allowed',
+                    borderRadius: '10px',
+                    color: (chatInput.trim() || selectedImage) && !uploading ? '#022c22' : 'rgba(167, 243, 208, 0.4)',
+                    cursor: (chatInput.trim() || selectedImage) && !uploading ? 'pointer' : 'not-allowed',
                     fontWeight: 600,
                     fontSize: '14px',
+                    flexShrink: 0,
                   }}
                 >
-                  Solve ➤
+                  {uploading ? '...' : '➤'}
                 </button>
               </div>
             </div>
@@ -823,50 +1007,60 @@ export default function Dashboard() {
         {/* Saved Tab */}
         {activeTab === 'saved' && (
           <div>
-            <h2 style={{ fontSize: '32px', fontWeight: 600, marginBottom: '32px' }}>Saved Items</h2>
+            <h2 style={{ fontSize: '26px', fontWeight: 600, marginBottom: '20px' }}>Saved Items</h2>
             
             {messages.filter(m => m.bookmarked).length === 0 ? (
               <div style={{
                 textAlign: 'center',
-                padding: '60px 20px',
+                padding: '40px 20px',
                 background: 'rgba(16, 185, 129, 0.05)',
                 border: '1px dashed rgba(16, 185, 129, 0.2)',
-                borderRadius: '20px',
+                borderRadius: '16px',
               }}>
-                <p style={{ color: 'rgba(167, 243, 208, 0.6)', fontSize: '18px' }}>
+                <p style={{ color: 'rgba(167, 243, 208, 0.6)', fontSize: '15px' }}>
                   No saved items yet. Bookmark explanations to save them here!
                 </p>
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 {messages.filter(m => m.bookmarked).map(bookmark => (
                   <div
                     key={bookmark.id}
                     style={{
                       display: 'flex',
-                      alignItems: 'center',
-                      gap: '16px',
-                      padding: '20px',
+                      alignItems: 'flex-start',
+                      gap: '12px',
+                      padding: '16px',
                       background: 'rgba(16, 185, 129, 0.08)',
                       border: '1px solid rgba(16, 185, 129, 0.15)',
-                      borderRadius: '14px',
+                      borderRadius: '12px',
                     }}
                   >
                     <div style={{
-                      width: '44px',
-                      height: '44px',
+                      width: '36px',
+                      height: '36px',
                       background: 'rgba(16, 185, 129, 0.2)',
-                      borderRadius: '12px',
+                      borderRadius: '10px',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      fontSize: '20px',
+                      fontSize: '16px',
+                      flexShrink: 0,
                     }}>
                       📄
                     </div>
-                    <div style={{ flex: 1 }}>
-                      <p style={{ margin: 0, fontSize: '15px', color: '#f0fdf4' }}>
-                        {bookmark.content.substring(0, 100)}...
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <p style={{ 
+                        margin: 0, 
+                        fontSize: '14px', 
+                        color: '#f0fdf4',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        display: '-webkit-box',
+                        WebkitLineClamp: 3,
+                        WebkitBoxOrient: 'vertical',
+                      }}>
+                        {bookmark.content}
                       </p>
                     </div>
                   </div>
@@ -884,10 +1078,11 @@ export default function Dashboard() {
           right: 0,
           top: 0,
           bottom: 0,
-          width: '400px',
+          width: '100%',
+          maxWidth: '400px',
           background: 'linear-gradient(180deg, #0a0f0d 0%, #0d1512 100%)',
           borderLeft: '1px solid rgba(16, 185, 129, 0.2)',
-          padding: '24px',
+          padding: '20px',
           zIndex: 100,
           overflowY: 'auto',
         }}>
@@ -895,11 +1090,11 @@ export default function Dashboard() {
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'flex-start',
-            marginBottom: '24px',
+            marginBottom: '20px',
           }}>
-            <div>
-              <h3 style={{ fontSize: '20px', fontWeight: 600, margin: 0 }}>{selectedNote.title}</h3>
-              <span style={{ fontSize: '13px', color: 'rgba(167, 243, 208, 0.5)' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <h3 style={{ fontSize: '18px', fontWeight: 600, margin: 0 }}>{selectedNote.title}</h3>
+              <span style={{ fontSize: '12px', color: 'rgba(167, 243, 208, 0.5)' }}>
                 {new Date(selectedNote.created_at).toLocaleDateString()}
               </span>
             </div>
@@ -912,6 +1107,7 @@ export default function Dashboard() {
                 padding: '8px 12px',
                 color: '#a7f3d0',
                 cursor: 'pointer',
+                flexShrink: 0,
               }}
             >
               ✕
@@ -921,11 +1117,11 @@ export default function Dashboard() {
             background: 'rgba(16, 185, 129, 0.05)',
             border: '1px solid rgba(16, 185, 129, 0.15)',
             borderRadius: '12px',
-            padding: '20px',
-            marginBottom: '20px',
+            padding: '16px',
+            marginBottom: '16px',
           }}>
             <p style={{
-              fontSize: '15px',
+              fontSize: '14px',
               lineHeight: 1.7,
               color: 'rgba(240, 253, 244, 0.85)',
               margin: 0,
@@ -942,10 +1138,10 @@ export default function Dashboard() {
             }}
             style={{
               width: '100%',
-              padding: '14px',
+              padding: '12px',
               background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
               border: 'none',
-              borderRadius: '12px',
+              borderRadius: '10px',
               color: '#022c22',
               fontWeight: 600,
               fontSize: '14px',

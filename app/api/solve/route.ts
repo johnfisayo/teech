@@ -7,7 +7,7 @@ const anthropic = new Anthropic({
 
 export async function POST(request: NextRequest) {
   try {
-    const { message, mode, notes, courseName } = await request.json()
+    const { message, mode, notes, courseName, imageUrl } = await request.json()
 
     let systemPrompt = `You are Teech, a friendly and helpful AI tutor. Your goal is to help students understand their course material better.
 
@@ -17,6 +17,7 @@ You should:
 - Break down complex problems step by step
 - Be encouraging and supportive
 - If solving a problem, show your work clearly
+- If analyzing an image of homework/assignment, read it carefully and help solve or explain it
 
 Current course: ${courseName || 'General'}
 `
@@ -30,6 +31,47 @@ Current course: ${courseName || 'General'}
       }
     }
 
+    // Build the message content
+    const messageContent: any[] = []
+
+    // Add image if provided
+    if (imageUrl) {
+      try {
+        // Fetch the image and convert to base64
+        const imageResponse = await fetch(imageUrl)
+        const imageBuffer = await imageResponse.arrayBuffer()
+        const base64Image = Buffer.from(imageBuffer).toString('base64')
+        
+        // Determine media type from URL
+        let mediaType = 'image/jpeg'
+        if (imageUrl.includes('.png')) {
+          mediaType = 'image/png'
+        } else if (imageUrl.includes('.gif')) {
+          mediaType = 'image/gif'
+        } else if (imageUrl.includes('.webp')) {
+          mediaType = 'image/webp'
+        }
+
+        messageContent.push({
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: mediaType,
+            data: base64Image,
+          },
+        })
+      } catch (imageError) {
+        console.error('Error fetching image:', imageError)
+        // Continue without image if there's an error
+      }
+    }
+
+    // Add text message
+    messageContent.push({
+      type: 'text',
+      text: message || 'Please analyze this image and help me understand it.',
+    })
+
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 1024,
@@ -37,7 +79,7 @@ Current course: ${courseName || 'General'}
       messages: [
         {
           role: 'user',
-          content: message,
+          content: messageContent,
         },
       ],
     })
