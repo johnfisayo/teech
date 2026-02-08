@@ -7,7 +7,7 @@ const anthropic = new Anthropic({
 
 export async function POST(request: NextRequest) {
   try {
-    const { message, mode, notes, courseName, imageUrl } = await request.json()
+    const { message, mode, notes, courseName, imageUrl, imageBase64, imageType } = await request.json()
 
     let systemPrompt = `You are Teech, a friendly and helpful AI tutor. Your goal is to help students understand their course material better.
 
@@ -34,36 +34,16 @@ Current course: ${courseName || 'General'}
     // Build the message content
     const messageContent: any[] = []
 
-    // Add image if provided
-    if (imageUrl) {
-      try {
-        // Fetch the image and convert to base64
-        const imageResponse = await fetch(imageUrl)
-        const imageBuffer = await imageResponse.arrayBuffer()
-        const base64Image = Buffer.from(imageBuffer).toString('base64')
-        
-        // Determine media type from URL
-        let mediaType = 'image/jpeg'
-        if (imageUrl.includes('.png')) {
-          mediaType = 'image/png'
-        } else if (imageUrl.includes('.gif')) {
-          mediaType = 'image/gif'
-        } else if (imageUrl.includes('.webp')) {
-          mediaType = 'image/webp'
-        }
-
-        messageContent.push({
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: mediaType,
-            data: base64Image,
-          },
-        })
-      } catch (imageError) {
-        console.error('Error fetching image:', imageError)
-        // Continue without image if there's an error
-      }
+    // Add image if provided (base64 directly from client)
+    if (imageBase64) {
+      messageContent.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: imageType || 'image/jpeg',
+          data: imageBase64,
+        },
+      })
     }
 
     // Add text message
@@ -74,7 +54,7 @@ Current course: ${courseName || 'General'}
 
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
+      max_tokens: 2048,
       system: systemPrompt,
       messages: [
         {
@@ -88,10 +68,10 @@ Current course: ${courseName || 'General'}
     const reply = textContent ? textContent.text : 'Sorry, I could not generate a response.'
 
     return NextResponse.json({ reply })
-  } catch (error) {
+  } catch (error: any) {
     console.error('API Error:', error)
     return NextResponse.json(
-      { error: 'Failed to get response from AI' },
+      { error: error.message || 'Failed to get response from AI' },
       { status: 500 }
     )
   }
